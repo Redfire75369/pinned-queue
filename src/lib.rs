@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::ptr;
 
@@ -26,13 +27,11 @@ impl<T> Block<T> {
 		self.0.push_back(item);
 	}
 
-	fn pop_front(&mut self) -> bool {
-		self.0
-			.front_mut()
-			.map(|p| unsafe {
-				ptr::drop_in_place(p);
-			})
-			.is_some()
+	fn pop_front(&mut self) {
+		self.0.front_mut().map(|p| unsafe {
+			ptr::drop_in_place(p);
+		});
+		let _ = ManuallyDrop::new(self.0.pop_front());
 	}
 
 	fn replace(&mut self, index: usize, item: T) {
@@ -48,7 +47,7 @@ pub struct PinnedQueue<T> {
 }
 
 impl<T> PinnedQueue<T> {
-	pub fn new() -> PinnedQueue<T> {
+	pub const fn new() -> PinnedQueue<T> {
 		PinnedQueue { blocks: VecDeque::new(), head: 0, len: 0 }
 	}
 
@@ -81,10 +80,15 @@ impl<T> PinnedQueue<T> {
 		}
 	}
 
+	/// Provides a pinned mutable reference to the last element.
+	pub fn last_mut(&mut self) -> Option<Pin<&mut T>> {
+		self.get_mut(self.len)
+	}
+
 	/// Appends an element to the end of the queue.
-	pub fn push_back(&mut self, index: usize, item: T) {
+	pub fn push_back(&mut self, item: T) {
 		let head_outer = outer_index(self.head);
-		let outer = outer_index(self.head + index);
+		let outer = outer_index(self.head + self.len);
 
 		if outer - head_outer >= self.blocks.len() {
 			self.blocks.push_back(Block::new(1 << outer));
@@ -117,14 +121,45 @@ impl<T> PinnedQueue<T> {
 	}
 }
 
-const fn outer_index(index: usize) -> usize {
+fn outer_index(index: usize) -> usize {
 	(usize::BITS - (index + 1).leading_zeros() - 1) as usize
 }
 
-const fn split_index(head: usize, index: usize) -> (usize, usize) {
+fn split_index(head: usize, index: usize) -> (usize, usize) {
 	let outer = outer_index(index + head);
 	let inner = (head + index + 1) & (!(1 << outer));
 	let head_outer = outer_index(head);
 	let head_inner = (head + 1) & (!(1 << head_outer));
-	(outer - head_outer, inner - head_inner)
+	if head_inner > inner {
+		(outer - head_outer - 1, head_inner - inner)
+	} else {
+		(outer - head_outer, inner - head_inner)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use crate::{outer_index, split_index};
+
+	#[test]
+	fn outer() {
+		assert_eq!(0, outer_index(0));
+		assert_eq!(1, outer_index(1));
+		assert_eq!(1, outer_index(2));
+		assert_eq!(2, outer_index(3));
+		assert_eq!(16, outer_index(65535));
+	}
+
+	#[test]
+	fn split() {
+		assert_eq!((0, 0), split_index(0, 0));
+		assert_eq!((1, 0), split_index(0, 1));
+		assert_eq!((1, 1), split_index(0, 2));
+
+		assert_eq!((0, 0), split_index(1, 0));
+		assert_eq!((0, 1), split_index(1, 1));
+		assert_eq!((1, 0), split_index(1, 2));
+
+		assert_eq!((3, 1), split_index(2, 15));
+	}
 }

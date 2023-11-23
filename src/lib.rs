@@ -1,7 +1,5 @@
 use std::collections::VecDeque;
-use std::mem::ManuallyDrop;
 use std::pin::Pin;
-use std::ptr;
 
 pub struct Block<T>(VecDeque<T>);
 
@@ -28,10 +26,7 @@ impl<T> Block<T> {
 	}
 
 	fn pop_front(&mut self) {
-		self.0.front_mut().map(|p| unsafe {
-			ptr::drop_in_place(p);
-		});
-		let _ = ManuallyDrop::new(self.0.pop_front());
+		self.0.drain(0..1);
 	}
 
 	fn replace(&mut self, index: usize, item: T) {
